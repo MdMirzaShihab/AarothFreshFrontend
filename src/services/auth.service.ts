@@ -19,18 +19,56 @@ import {
 export class AuthService {
   /**
    * Login with phone and password
+   * POST /api/v1/auth/login
    */
   static async login(credentials: LoginRequest): Promise<LoginResponse> {
-    const response = await api.post<LoginResponse>('/auth/login', credentials);
-    return response;
+    const response = await api.post<{
+      success: boolean;
+      token: string;
+      user: User;
+    }>('/auth/login', {
+      phone: credentials.phone,
+      password: credentials.password,
+    });
+    
+    return {
+      success: true,
+      token: response.token,
+      user: response.user,
+    };
   }
 
   /**
    * Register new user
+   * POST /api/v1/auth/register
    */
   static async register(data: RegisterRequest): Promise<RegisterResponse> {
-    const response = await api.post<RegisterResponse>('/auth/register', data);
-    return response;
+    const response = await api.post<{
+      success: boolean;
+      token: string;
+      user: User;
+    }>('/auth/register', {
+      phone: data.phone,
+      password: data.password,
+      name: data.name,
+      role: data.role,
+      // Vendor-specific fields
+      ...(data.businessName && { businessName: data.businessName }),
+      ...(data.businessAddress && { businessAddress: data.businessAddress }),
+      ...(data.businessLicense && { businessLicense: data.businessLicense }),
+      ...(data.businessType && { businessType: data.businessType }),
+      // Restaurant-specific fields
+      ...(data.restaurantName && { restaurantName: data.restaurantName }),
+      ...(data.restaurantAddress && { restaurantAddress: data.restaurantAddress }),
+      ...(data.restaurantType && { restaurantType: data.restaurantType }),
+      ...(data.cuisineType && { cuisineType: data.cuisineType }),
+    });
+    
+    return {
+      success: true,
+      token: response.token,
+      user: response.user,
+    };
   }
 
   /**

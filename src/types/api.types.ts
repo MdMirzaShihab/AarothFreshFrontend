@@ -40,3 +40,27 @@ export interface ApiErrorResponse {
   statusCode: number;
   details?: Record<string, string[]>; // Validation errors
 }
+
+// API Error class for consistent error handling
+export class ApiError extends Error {
+  public status: number;
+  public statusCode: number;
+  public details?: Record<string, string[]> | undefined;
+
+  constructor(
+    message: string, 
+    status: number = 500, 
+    details?: Record<string, string[]> | undefined
+  ) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.statusCode = status;
+    this.details = details;
+
+    // Maintains proper stack trace for where our error was thrown (only available on V8)
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, ApiError);
+    }
+  }
+}

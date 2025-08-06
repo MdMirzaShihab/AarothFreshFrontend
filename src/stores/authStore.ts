@@ -3,20 +3,20 @@ import { devtools, persist } from 'zustand/middleware';
 import { 
   User, 
   AuthState, 
-  LoginCredentials, 
   RegistrationData,
   AuthError,
   AuthErrorType
 } from '@/types';
 import { TokenManager } from '@/utils';
+import { AuthService } from '@/services/auth.service';
 import { api } from '@/services/api';
 
 interface AuthActions {
   // Authentication actions
-  login: (credentials: LoginCredentials) => Promise<void>;
+  login: (user: User, token: string) => void;
   register: (data: RegistrationData) => Promise<void>;
-  logout: () => void;
-  refreshToken: () => Promise<void>;
+  logout: () => Promise<void>;
+  refreshToken: () => Promise<boolean>;
   
   // Profile actions
   updateProfile: (updates: Partial<User>) => Promise<void>;
@@ -30,7 +30,7 @@ interface AuthActions {
   clearError: () => void;
   
   // Initialization
-  initialize: () => void;
+  initialize: () => Promise<void>;
 }
 
 type AuthStore = AuthState & AuthActions;
@@ -51,50 +51,19 @@ export const useAuthStore = create<AuthStore>()(
         isLoading: false,
         error: null,
 
-        // Authentication actions
-        login: async (credentials: LoginCredentials) => {
-          set({ isLoading: true, error: null });
-          
-          try {
-            const response = await api.post<{
-              success: boolean;
-              token: string;
-              user: User;
-            }>('/auth/login', {
-              phone: credentials.phone,
-              password: credentials.password,
-            });
+        // Authentication actions - simplified to just store the auth data
+        login: (user: User, token: string) => {
+          // Store token and user data
+          TokenManager.setToken(token);
+          TokenManager.setUser(user);
 
-            if (response.success) {
-              // Store token and user data
-              TokenManager.setToken(response.token);
-              TokenManager.setUser(response.user);
-              api.setToken(response.token);
-
-              set({
-                isAuthenticated: true,
-                user: response.user,
-                token: response.token,
-                isLoading: false,
-                error: null,
-              });
-            } else {
-              throw new Error('Login failed');
-            }
-          } catch (error: any) {
-            const errorMessage = error.response?.data?.message || 'Login failed';
-            const authError = createAuthError('INVALID_CREDENTIALS', errorMessage);
-            
-            set({
-              isAuthenticated: false,
-              user: null,
-              token: null,
-              isLoading: false,
-              error: authError.message,
-            });
-            
-            throw authError;
-          }
+          set({
+            isAuthenticated: true,
+            user,
+            token,
+            isLoading: false,
+            error: null,
+          });
         },
 
         register: async (data: RegistrationData) => {
@@ -148,10 +117,17 @@ export const useAuthStore = create<AuthStore>()(
           }
         },
 
-        logout: () => {
+        logout: async () => {
+          try {
+            // Call backend logout endpoint
+            await AuthService.logout();
+          } catch (error) {
+            // Even if backend call fails, continue with local logout
+            console.warn('Backend logout failed:', error);
+          }
+
           // Clear all stored data
           TokenManager.clearAll();
-          api.removeToken();
 
           // Reset store state
           set({
@@ -168,37 +144,36 @@ export const useAuthStore = create<AuthStore>()(
           }
         },
 
-        refreshToken: async () => {
+        refreshToken: async (): Promise<boolean> => {
           const refreshToken = TokenManager.getRefreshToken();
           
           if (!refreshToken) {
-            get().logout();
-            return;
+            await get().logout();
+            return false;
           }
 
           try {
-            const response = await api.post<{
-              success: boolean;
-              token: string;
-              refreshToken: string;
-            }>('/auth/refresh', {
-              refreshToken,
-            });
+            const response = await AuthService.refreshToken({ refreshToken });
 
-            if (response.success) {
+            if (response.success && response.token) {
               TokenManager.setToken(response.token);
-              TokenManager.setRefreshToken(response.refreshToken);
-              api.setToken(response.token);
+              if (response.refreshToken) {
+                TokenManager.setRefreshToken(response.refreshToken);
+              }
 
               set({
                 token: response.token,
                 error: null,
               });
+              
+              return true;
             } else {
-              get().logout();
+              await get().logout();
+              return false;
             }
           } catch (error) {
-            get().logout();
+            await get().logout();
+            return false;
           }
         },
 
@@ -287,21 +262,44 @@ export const useAuthStore = create<AuthStore>()(
         clearError: () => set({ error: null }),
 
         // Initialization
-        initialize: () => {
+        initialize: async () => {
+          set({ isLoading: true });
+          
           const token = TokenManager.getToken();
           const user = TokenManager.getUser();
           
           if (token && user && TokenManager.hasValidToken()) {
-            api.setToken(token);
-            set({
-              isAuthenticated: true,
-              user,
-              token,
-              isLoading: false,
-              error: null,
-            });
+            try {
+              // Verify token is still valid by fetching current user profile
+              const currentUser = await AuthService.getProfile();
+              
+              set({
+                isAuthenticated: true,
+                user: currentUser,
+                token,
+                isLoading: false,
+                error: null,
+              });
+            } catch (error) {
+              // Token invalid, try to refresh
+              const refreshSuccess = await get().refreshToken();
+              
+              if (!refreshSuccess) {
+                // Refresh failed, clear everything
+                TokenManager.clearAll();
+                set({
+                  isAuthenticated: false,
+                  user: null,
+                  token: null,
+                  isLoading: false,
+                  error: null,
+                });
+              } else {
+                set({ isLoading: false });
+              }
+            }
           } else {
-            // Clear invalid tokens
+            // No valid session
             TokenManager.clearAll();
             set({
               isAuthenticated: false,
